@@ -117,6 +117,28 @@ class MetadataTests(Files):
         inv = Inventory([], [], [record(scope=movie, status=True, dest=video)])
         self.assertTrue({video, nfo, poster} <= set(Planner(self.fs).build(inv, {movie}).files))
 
+    def test_explicit_cancel_repairs_scraper_only_directory_without_histories(self):
+        _, source, target, metadata, neighbour = self.setup_media()
+        Path(source).unlink()
+        Path(target).unlink()
+        inv = Inventory([], [], [])
+        self.assertFalse(Planner(self.fs).build(inv, set()).has_actions)
+        ctl, _, _ = self.controller(inv)
+        ctl.enqueue_cancel(SCOPE)
+        ctl.run(dry_run=False)
+        self.assertFalse(any(Path(p).exists() for p in metadata))
+        self.assertTrue(Path(neighbour).exists())
+
+    def test_scraper_only_repair_keeps_other_subscription_and_unknown_partial_video(self):
+        _, source, target, metadata, _ = self.setup_media()
+        Path(source).unlink()
+        Path(target).unlink()
+        inv = Inventory([Subscription(2, Scope(SCOPE.source, SCOPE.media_id, 'tv', 2))], [], [])
+        self.assertFalse(Planner(self.fs).build(inv, {SCOPE}).has_actions)
+        inv.subscriptions.clear()
+        self.file('library/Show/Season 1/unknown.mkv.!qB')
+        self.assertFalse(Planner(self.fs).build(inv, {SCOPE}).has_actions)
+
 
 class RetentionTests(Files):
     def test_completed_and_paused_membership_keeps_files(self):

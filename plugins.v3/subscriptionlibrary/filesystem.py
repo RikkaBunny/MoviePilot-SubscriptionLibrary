@@ -129,6 +129,48 @@ class PathPolicy:
         except (ElementTree.ParseError, OSError, ValueError):
             return False
 
+    def cancel_empty_metadata(self, cancelled, selected: set[str], active_scopes) -> dict[str, tuple]:
+        """Repair scraper-only directories after older versions removed their histories.
+
+        Requires a current cancellation, matching NFO identity, no active subscription
+        for that media, and no remaining video. It never adopts unidentified files.
+        """
+        eligible = [s for s in cancelled if not any(
+            (a.source, a.media_id, a.kind) == (s.source, s.media_id, s.kind) for a in active_scopes)]
+        if not eligible:
+            return {}
+        result, visited, count = {}, set(), 0
+        for root in self.roots:
+            for parent, dirs, names in os.walk(root, followlinks=False, onerror=self._raise):
+                dirs[:] = [d for d in dirs if not Path(parent, d).is_symlink()]
+                count += len(names)
+                if count > self.scan_limit:
+                    raise ValueError('Metadata scan limit exceeded; deletion deferred')
+                for name in names:
+                    if name.lower() not in {'tvshow.nfo', 'movie.nfo'}:
+                        continue
+                    nfo = Path(parent, name)
+                    if str(nfo) in visited:
+                        continue
+                    visited.add(str(nfo))
+                    for scope in eligible:
+                        expected = 'tvshow.nfo' if scope.kind == 'tv' else 'movie.nfo'
+                        if name.lower() != expected or not self._nfo_identity(nfo, scope):
+                            continue
+                        folder = nfo.parent
+                        if self._remaining_video(folder, selected):
+                            continue
+                        result.update(self.cancel_metadata(scope, str(folder / 'metadata-proof.mkv'),
+                                                           selected, active_scopes))
+                        if scope.kind == 'tv':
+                            for child in folder.iterdir():
+                                if (child.is_dir() and not child.is_symlink()
+                                        and re.fullmatch(r'(?i)(?:Season\s*\d{1,3}|S\d{1,3})', child.name)):
+                                    result.update(self.cancel_metadata(scope, str(child / 'metadata-proof.mkv'),
+                                                                       selected, active_scopes))
+                        break
+        return result
+
     def _remaining_video(self, directory: Path, selected: set[str]) -> bool:
         count = 0
         for parent, dirs, names in os.walk(directory, followlinks=False, onerror=self._raise):
@@ -139,7 +181,8 @@ class PathPolicy:
                 if count > self.scan_limit:
                     raise ValueError('Metadata scan limit exceeded; deletion deferred')
                 path = Path(parent, name)
-                if path.suffix.lower() in VIDEO and str(path) not in selected:
+                suffix = Path(path.name.removesuffix('.!qB')).suffix.lower()
+                if suffix in VIDEO and str(path) not in selected:
                     return True
         return False
 

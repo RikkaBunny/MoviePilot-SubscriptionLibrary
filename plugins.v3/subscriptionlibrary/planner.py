@@ -223,6 +223,8 @@ class Planner:
                 for claim in claims:
                     plan.files.update(self.fs.cancel_metadata(claim.scope, str(row['dest']),
                                                              set(plan.files), set(subscriptions)))
+        plan.files.update(self.fs.cancel_empty_metadata(cancelled - set(subscriptions),
+                                                       set(plan.files), set(subscriptions)))
         source_paths = {f.path for torrent in inventory.torrents.values() for f in torrent.files}
         source_paths.update(p + '.!qB' for p in list(source_paths))
         plan.mutable_sources = sorted(source_paths & set(plan.files))
