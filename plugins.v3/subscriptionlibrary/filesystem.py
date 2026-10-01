@@ -119,8 +119,13 @@ class PathPolicy:
         source = {'themoviedb': 'tmdb'}.get(scope.source, scope.source)
         try:
             root = ElementTree.fromstring(path.read_bytes())
+            expected_root = 'tvshow' if scope.kind == 'tv' else 'movie'
+            if root.tag.rsplit('}', 1)[-1].lower() != expected_root:
+                return False
             ids = set()
-            for node in root.iter():
+            # Cast/crew nodes also contain tmdbid. Only direct media identity
+            # fields identify this NFO's movie or series.
+            for node in root:
                 tag = node.tag.rsplit('}', 1)[-1].lower()
                 if ((tag == 'uniqueid' and node.get('type', '').lower() in {source, scope.source})
                         or tag == source + 'id'):

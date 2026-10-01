@@ -117,6 +117,22 @@ class MetadataTests(Files):
         inv = Inventory([], [], [record(scope=movie, status=True, dest=video)])
         self.assertTrue({video, nfo, poster} <= set(Planner(self.fs).build(inv, {movie}).files))
 
+    def test_media_nfo_identity_ignores_nested_cast_ids(self):
+        inv, _, _, metadata, _ = self.setup_media()
+        nfo = next(Path(p) for p in metadata if p.endswith('tvshow.nfo'))
+        nfo.write_bytes(b'<tvshow><tmdbid>100</tmdbid><uniqueid type="tmdb">100</uniqueid>'
+                        b'<actor><tmdbid>200</tmdbid></actor><actor><tmdbid>300</tmdbid></actor></tvshow>')
+        self.assertTrue(metadata <= set(Planner(self.fs).build(inv, {SCOPE}).files))
+
+    def test_nested_only_or_wrong_nfo_root_cannot_prove_identity(self):
+        inv, _, _, metadata, _ = self.setup_media()
+        nfo = next(Path(p) for p in metadata if p.endswith('tvshow.nfo'))
+        for value in (b'<tvshow><actor><tmdbid>100</tmdbid></actor></tvshow>',
+                      b'<actor><tmdbid>100</tmdbid></actor>',
+                      b'<movie><tmdbid>100</tmdbid></movie>'):
+            nfo.write_bytes(value)
+            self.assertFalse(metadata & set(Planner(self.fs).build(inv, {SCOPE}).files))
+
     def test_explicit_cancel_repairs_scraper_only_directory_without_histories(self):
         _, source, target, metadata, neighbour = self.setup_media()
         Path(source).unlink()
