@@ -96,6 +96,8 @@ class Controller:
         for key in set(state.get('members', [])) - set(current_members):
             state['cancelled'].setdefault(key, now())
         state['members'] = current_members
+        labels = state.setdefault('labels', {})
+        labels.update({sub.scope.key: sub.name for sub in inventory.subscriptions if sub.name})
         current = artifacts(inventory, self.fs)
         if self.archive_enabled:
             state['archived'] = capture_evictions(state.get('artifacts', []), current,

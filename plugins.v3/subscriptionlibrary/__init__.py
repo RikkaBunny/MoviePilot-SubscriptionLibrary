@@ -22,7 +22,7 @@ class SubscriptionLibrary(_PluginBase):
     plugin_name = '订阅媒体库'
     plugin_desc = '保留已完成订阅；取消订阅联动清理；集数范围同步；容量清理后防重复下载。'
     plugin_icon = 'Moviepilot_A.jpg'
-    plugin_version = '0.1.0'
+    plugin_version = '0.1.1'
     plugin_author = 'RikkaBunny'
     author_url = 'https://github.com/RikkaBunny'
     plugin_config_prefix = 'subscriptionlibrary_'
@@ -240,7 +240,7 @@ class SubscriptionLibrary(_PluginBase):
         choices = []
         for key, eps in state.get('archived', {}).items():
             scope = scope_from_key(key)
-            label = f'{scope.source}:{scope.media_id} S{scope.season:02d} · ' + ('全部' if eps is None else f'{len(eps)} 集')
+            label = self._scope_label(state, key) + ' · ' + ('全部归档' if eps is None else f'归档 {len(eps)} 集')
             choices.append({'title': label, 'value': key})
         def field(component, model, label, **props):
             return {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [
@@ -263,6 +263,12 @@ class SubscriptionLibrary(_PluginBase):
                  'content': [{'component': 'div', 'text': '关闭演练后，取消订阅及缩小手动集数范围会永久删除对应下载任务、下载源和媒体文件。归档记录需通过上方恢复下载，或取消后重新订阅。'}]}]
         return form, self.defaults()
 
+    @staticmethod
+    def _scope_label(state, key):
+        scope = scope_from_key(key)
+        name = state.get('labels', {}).get(key) or f'{scope.source}:{scope.media_id}'
+        return name + (f' · 第 {scope.season} 季' if scope.kind == 'tv' else '')
+
     def get_page(self):
         state = self.get_data('state') or {}
         preview = state.get('preview') or {}
@@ -274,6 +280,32 @@ class SubscriptionLibrary(_PluginBase):
         error = self._config_error or state.get('last_error')
         if error:
             rows.append({'component': 'VAlert', 'props': {'type': 'error'}, 'text': error})
-        rows.append({'component': 'pre', 'text': json.dumps({'preview': preview, 'archived': state.get('archived', {}),
-                                                          'pending': state.get('pending')}, ensure_ascii=False, indent=2)})
+        if state.get('pending'):
+            rows.append({'component': 'VAlert', 'props': {'type': 'warning'},
+                         'text': '有未完成的清理步骤，已保存进度；下次巡检会核对订阅并重试。'})
+        for warning in preview.get('warnings', []):
+            rows.append({'component': 'VAlert', 'props': {'type': 'warning', 'variant': 'tonal'}, 'text': warning})
+        if not preview.get('files') and not preview.get('drops') and not preview.get('priorities'):
+            rows.append({'component': 'VAlert', 'props': {'type': 'success', 'variant': 'tonal'},
+                         'text': '当前预览没有待清理的关联文件或下载任务。存在核对提示时，相应内容仍会保留。'})
+        for heading, values in [('将移除的下载任务', preview.get('drops', [])),
+                                ('将删除的文件', list(preview.get('files', {})))]:
+            if not values:
+                continue
+            rows.append({'component': 'h3', 'text': heading})
+            rows.append({'component': 'VList', 'content': [
+                {'component': 'VListItem', 'props': {'title': value}} for value in values[:50]]})
+            if len(values) > 50:
+                rows.append({'component': 'div', 'text': f'另有 {len(values) - 50} 项，完整清单可通过状态接口查看。'})
+        for key, indexes in preview.get('priorities', {}).items():
+            rows.append({'component': 'div', 'text': f'保留混合下载任务 {key}，跳过 {len(indexes)} 个冗余文件。'})
+        if state.get('archived'):
+            rows.append({'component': 'h3', 'text': '容量清理归档（订阅仍保留）'})
+            for key, episodes in state['archived'].items():
+                detail = '全部内容' if episodes is None else '集数：' + '、'.join(map(str, episodes[:50]))
+                if episodes is not None and len(episodes) > 50:
+                    detail += f'，共 {len(episodes)} 集'
+                rows.append({'component': 'VListItem', 'props': {
+                    'title': self._scope_label(state, key), 'subtitle': detail}})
+            rows.append({'component': 'div', 'text': '需要旧内容时，在插件设置中选择“恢复自动下载”并保存。新单集仍能自动下载。'})
         return rows

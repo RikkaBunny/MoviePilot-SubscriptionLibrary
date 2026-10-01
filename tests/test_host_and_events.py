@@ -99,6 +99,17 @@ class EventTests(unittest.TestCase):
         self.assertEqual(p.defaults()['managed_roots'], '')
         self.assertEqual([(r['path'], r['auth']) for r in p.get_api()], [('/status', 'bear')])
 
+    def test_page_uses_human_names_and_does_not_dump_internal_state(self):
+        self.p.save_data('state', {'labels': {SCOPE.key: 'Example Show'}, 'archived': {SCOPE.key: [1]},
+                                  'preview': {'fingerprint': 'secret-internal-hash', 'files': {}, 'drops': [],
+                                              'warnings': ['Season missing; retained']}})
+        page = str(self.p.get_page())
+        self.assertIn('Example Show', page)
+        self.assertIn('Season missing; retained', page)
+        self.assertNotIn('secret-internal-hash', page)
+        form, _ = self.p.get_form()
+        self.assertIn('Example Show', str(form))
+
 
 class HostTests(unittest.TestCase):
     def setUp(self):
