@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from contextlib import contextmanager
+import fcntl
 import threading
 from pathlib import Path
 
@@ -20,11 +22,30 @@ def now() -> str:
 
 
 class Controller:
-    def __init__(self, host, fs: PathPolicy, load, save, active, archive_enabled=True, max_files=10000):
+    _process_lock = threading.RLock()
+
+    def __init__(self, host, fs: PathPolicy, load, save, active, archive_enabled=True, max_files=10000,
+                 lock_path: Path | None = None):
         self.host, self.fs = host, fs
         self.load, self.save, self.active = load, save, active
         self.archive_enabled, self.max_files = archive_enabled, max_files
-        self.lock = threading.RLock()
+        self.lock = self._process_lock
+        self.lock_path = lock_path
+
+    @contextmanager
+    def locked(self):
+        # Shared across reload instances, plus an advisory lock across host workers.
+        with self.lock:
+            if self.lock_path is None:
+                yield
+                return
+            self.lock_path.parent.mkdir(parents=True, exist_ok=True)
+            with self.lock_path.open('a') as handle:
+                fcntl.flock(handle, fcntl.LOCK_EX)
+                try:
+                    yield
+                finally:
+                    fcntl.flock(handle, fcntl.LOCK_UN)
 
     def state(self) -> dict:
         state = self.load() or {'schema': 1, 'cancelled': {}, 'archived': {}, 'artifacts': []}
@@ -33,19 +54,26 @@ class Controller:
         return state
 
     def enqueue_cancel(self, scope: Scope) -> None:
-        with self.lock:
+        with self.locked():
             state = self.state()
             state['cancelled'][scope.key] = now()
             self.save(state)
 
     def restore(self, keys: list[str]) -> None:
-        with self.lock:
+        with self.locked():
             state = self.state()
             for key in keys:
                 state['archived'].pop(key, None)
             # Reset old absence observations too; otherwise the next guard rearchives them.
             state['artifacts'] = [r for r in state.get('artifacts', []) if r['scope'] not in keys]
             state['last_restore'] = now()
+            self.save(state)
+
+    def reset_baseline(self) -> None:
+        with self.locked():
+            state = self.state()
+            state.pop('roots', None)
+            state['artifacts'] = []
             self.save(state)
 
     def _roots(self, state: dict) -> None:
@@ -77,7 +105,7 @@ class Controller:
 
     def detect_before_download(self) -> dict:
         """DiskCleaner removes history without an event: detect absence in the download gate too."""
-        with self.lock:
+        with self.locked():
             state = self.state()
             self._roots(state)
             previous = state.get('artifacts', [])
@@ -165,7 +193,7 @@ class Controller:
             self.save(state)
 
     def run(self, dry_run: bool = True) -> dict:
-        with self.lock:
+        with self.locked():
             state = self.state()
             try:
                 inventory = self.host.inventory()

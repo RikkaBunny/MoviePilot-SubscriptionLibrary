@@ -3,6 +3,8 @@ import json
 import os
 from pathlib import Path
 import tempfile
+import threading
+import time
 import unittest
 
 from support import SCOPE, FakeHost, record
@@ -248,6 +250,28 @@ class ArchiveTests(Files):
 
 
 class ExecutorTests(Files):
+    def test_reload_instances_do_not_overwrite_concurrent_cancel_intents(self):
+        inv, _, _ = self.inventory()
+        store = {}
+        def load():
+            snapshot = deepcopy(store)
+            time.sleep(0.01)
+            return snapshot
+        def save(value):
+            store.clear()
+            store.update(deepcopy(value))
+        one = Controller(FakeHost(inv), self.fs, load, save, lambda: True, lock_path=self.root / 'state.lock')
+        two = Controller(FakeHost(inv), self.fs, load, save, lambda: True, lock_path=self.root / 'state.lock')
+        other = Scope('themoviedb', '200', 'tv', 1)
+        threads = [threading.Thread(target=one.enqueue_cancel, args=(SCOPE,)),
+                   threading.Thread(target=two.enqueue_cancel, args=(other,))]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=2)
+            self.assertFalse(thread.is_alive())
+        self.assertEqual(set(store['cancelled']), {SCOPE.key, other.key})
+
     def test_periodic_reconciliation_recovers_missed_cancel_event(self):
         inv, src, dst = self.inventory()
         ctl, host, store = self.controller(inv)

@@ -50,12 +50,10 @@ class SubscriptionLibrary(_PluginBase):
                 fs = PathPolicy(roots)
                 self._controller = Controller(MPHost(self), fs, lambda: self.get_data('state'),
                                               lambda state: self.save_data('state', state), self._deletion_active,
-                                              bool(self._config['archive_guard']), int(self._config['max_files']))
+                                              bool(self._config['archive_guard']), int(self._config['max_files']),
+                                              self.get_data_path() / 'state.lock')
                 if self._config.get('reset_root_baseline'):
-                    state = self._controller.state()
-                    state.pop('roots', None)
-                    state['artifacts'] = []
-                    self.save_data('state', state)
+                    self._controller.reset_baseline()
                 if self._config.get('restore_scopes'):
                     self._controller.restore(list(self._config['restore_scopes']))
                 run_once = bool(self._config.get('run_once'))

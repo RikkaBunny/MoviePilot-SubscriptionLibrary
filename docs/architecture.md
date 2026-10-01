@@ -28,6 +28,8 @@ flowchart TD
 
 没有独立常驻进程、1Panel cron、宿主数据库 SQL、私有配置拷贝或 monkey patch。宿主服务发现负责连接和路径映射。历史删除通过经认证的 localhost HTTP API，凭据仅运行时读取，不写入日志/插件数据。
 
+状态修改使用进程共享线程锁及插件数据目录中的文件锁，避免热重载实例、事件回调和巡检相互覆盖取消/归档记录。运行入口另有非阻塞执行锁，重复调度直接跳过，保留下一轮正常巡检。
+
 ## v3.0.4 接口基线
 
 已对照 [MoviePilot v3.0.4](https://github.com/jxxghp/MoviePilot/tree/v3.0.4)，提交 `e195cc164fc8ff869ffee0ea44a49c7ec475310c`。
