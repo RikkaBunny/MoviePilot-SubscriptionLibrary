@@ -5,7 +5,7 @@ from unittest.mock import Mock, patch
 
 from support import SCOPE, plugin, sdk_queries, http, event, record
 from subscriptionlibrary.host import MPHost
-from subscriptionlibrary.models import Scope, Subscription
+from subscriptionlibrary.models import Inventory, Scope, Subscription
 
 
 def context(episodes):
@@ -209,6 +209,33 @@ class HostTests(unittest.TestCase):
     def test_target_marker_preserves_existing_episode_fact(self):
         row = record(seasons='S01', episodes='E03', status=True, dest='/library/Show.S01E02.mkv')
         self.assertEqual(MPHost.normalize(row)['episodes'], 'E03')
+
+    def test_native_task_link_proves_seasonless_extras_without_inventing_episode(self):
+        extra = record(seasons='', episodes='', downloader='qB', download_hash='hash')
+        inventory = Inventory([], [record(downloader='qB', download_hash='hash')], [extra])
+        MPHost.link_transfer_seasons(inventory)
+        self.assertEqual((extra['seasons'], extra['episodes']), ('S01', ''))
+
+    def test_native_task_link_requires_exact_provider_hash_and_media_identity(self):
+        download = record(downloader='qB', download_hash='hash')
+        for change in ({'downloader': None}, {'downloader': 'other'}, {'download_hash': None},
+                       {'download_hash': 'other'}, {'media_source': 'bangumi'},
+                       {'media_id': 'other'}, {'episode_group': 'other'}):
+            extra = record(**{'seasons': '', 'episodes': '', 'downloader': 'qB', 'download_hash': 'hash', **change})
+            MPHost.link_transfer_seasons(Inventory([], [download], [extra]))
+            self.assertEqual(extra['seasons'], '')
+
+    def test_native_task_link_refuses_conflicting_or_unknown_download_season(self):
+        for downloads in ([record(seasons='', downloader='qB', download_hash='hash')],
+                          [record(seasons=s, downloader='qB', download_hash='hash') for s in ('S01', 'S02')]):
+            extra = record(seasons='', episodes='', downloader='qB', download_hash='hash')
+            MPHost.link_transfer_seasons(Inventory([], downloads, [extra]))
+            self.assertEqual(extra['seasons'], '')
+
+    def test_native_task_link_never_replaces_explicit_transfer_season(self):
+        extra = record(seasons='S02', downloader='qB', download_hash='hash')
+        MPHost.link_transfer_seasons(Inventory([], [record(downloader='qB', download_hash='hash')], [extra]))
+        self.assertEqual(extra['seasons'], 'S02')
 
     def test_pagination_and_truncated_page_refused(self):
         query = Mock(side_effect=[SimpleNamespace(items=[{'id': 1}], has_next=True),

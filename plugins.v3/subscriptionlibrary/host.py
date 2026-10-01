@@ -94,6 +94,7 @@ class MPHost:
         inventory = Inventory(self.subscriptions(),
                               [self.normalize(r) for r in self._list(queries.list_download_history)],
                               [self.normalize(r) for r in self._list(queries.list_transfer_history)])
+        self.link_transfer_seasons(inventory)
         if not include_torrents:
             return inventory
         groups = defaultdict(set)
@@ -145,6 +146,36 @@ class MPHost:
                 # Do not put provider exceptions/connection strings into a public-facing report.
                 inventory.errors.append(f'下载器 {name} 文件清单读取失败，清理已延后')
         return inventory
+
+    @staticmethod
+    def link_transfer_seasons(inventory: Inventory) -> None:
+        """Attach seasonless extras only through an exact native downloader/hash identity.
+
+        The matching download's proven season also owns OP/ED/PV files that have no
+        episode number. They stay during range pruning, and go on whole cancellation.
+        """
+        scopes = defaultdict(set)
+        for row in inventory.downloads:
+            if not row.get('downloader') or not row.get('download_hash'):
+                continue
+            try:
+                scope = Scope.from_dict(row)
+                if scope.kind == 'tv':
+                    scopes[row['downloader'], row['download_hash']].add(scope)
+            except (ValueError, TypeError):
+                continue
+        for row in inventory.transfers:
+            if scalar(row.get('seasons')) or not row.get('downloader') or not row.get('download_hash'):
+                continue
+            candidates = set()
+            for scope in scopes.get((row['downloader'], row['download_hash']), set()):
+                try:
+                    if Scope.from_dict(row, scope.season) == scope:
+                        candidates.add(scope)
+                except (ValueError, TypeError):
+                    continue
+            if len(candidates) == 1:
+                row['seasons'] = f'S{next(iter(candidates)).season:02}'
 
     def set_priorities(self, key: str, ids: list[int]) -> None:
         name, hash_value = key.split(':', 1)
