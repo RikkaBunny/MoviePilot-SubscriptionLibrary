@@ -22,7 +22,7 @@ class SubscriptionLibrary(_PluginBase):
     plugin_name = '订阅媒体库'
     plugin_desc = '保留已完成订阅；取消订阅联动清理；集数范围同步；容量清理后防重复下载。'
     plugin_icon = 'Moviepilot_A.jpg'
-    plugin_version = '0.1.5'
+    plugin_version = '0.1.6'
     plugin_author = 'RikkaBunny'
     author_url = 'https://github.com/RikkaBunny'
     plugin_config_prefix = 'subscriptionlibrary_'
@@ -205,6 +205,8 @@ class SubscriptionLibrary(_PluginBase):
             kept = []
             for ctx in contexts:
                 scope, eps = MPHost.context_claim(ctx, sub)
+                if sub is not None and scope is None:
+                    continue
                 if scope is None or not blocked(scope, eps, archive):
                     kept.append(ctx)
             if len(kept) != len(contexts):
@@ -227,6 +229,10 @@ class SubscriptionLibrary(_PluginBase):
                 return
             archive = self._controller.detect_before_download() if self._config.get('archive_guard') else {}
             scope, eps = MPHost.context_claim(self._get(data, 'context'), sub)
+            if sub is not None and scope is None:
+                self._set(data, cancel=True, source=self.plugin_name,
+                          reason='候选媒体与当前订阅身份不一致，自动下载中止')
+                return
             chosen = self._get(data, 'episodes')
             if chosen:
                 eps = frozenset(chosen)

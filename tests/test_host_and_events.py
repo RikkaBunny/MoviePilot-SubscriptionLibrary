@@ -102,6 +102,22 @@ class EventTests(unittest.TestCase):
         self.p.suppress_evicted_download(event(data))
         self.assertTrue(data['cancel'])
 
+    def test_reused_subscription_id_cannot_authorize_old_media_download(self):
+        self.p._config['archive_guard'] = False
+        candidate = context([3])
+        candidate['media_info']['media_id'] = 'cancelled-old-media'
+        data = {'origin': 'Subscribe|{"id":1}', 'context': candidate}
+        self.p.suppress_evicted_download(event(data))
+        self.assertTrue(data['cancel'])
+        self.assertIn('身份不一致', data['reason'])
+
+    def test_mismatched_selection_is_removed_while_matching_candidate_remains(self):
+        wrong, wanted = context([3]), context([3])
+        wrong['media_info']['media_source'] = 'bangumi'
+        data = {'origin': 'Subscribe|{"id":1}', 'contexts': [wrong, wanted]}
+        self.p.suppress_evicted_selection(event(data))
+        self.assertEqual(data['updated_contexts'], [wanted])
+
     def test_cancel_event_is_durable_intent_not_immediate_filesystem_delete(self):
         data = {'subscribe_id': 1, 'subscribe_info': {**record(), 'season': 1}, 'idempotency_key': 'one'}
         self.p.subscription_deleted(event(data))

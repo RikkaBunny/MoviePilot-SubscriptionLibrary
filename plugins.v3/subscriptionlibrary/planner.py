@@ -216,6 +216,13 @@ class Planner:
         plan.drops.sort()
         plan.transfer_ids.sort()
         plan.download_ids.sort()
+        for row in inventory.transfers:
+            claims = row_claims.get(int(row['id']), [])
+            if (row.get('status') and row.get('dest') and claims
+                    and all(c.scope in cancelled and c.scope not in subscriptions for c in claims)):
+                for claim in claims:
+                    plan.files.update(self.fs.cancel_metadata(claim.scope, str(row['dest']),
+                                                             set(plan.files), set(subscriptions)))
         source_paths = {f.path for torrent in inventory.torrents.values() for f in torrent.files}
         source_paths.update(p + '.!qB' for p in list(source_paths))
         plan.mutable_sources = sorted(source_paths & set(plan.files))

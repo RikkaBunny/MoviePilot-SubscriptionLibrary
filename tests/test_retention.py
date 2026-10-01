@@ -48,6 +48,76 @@ class Files(unittest.TestCase):
         return ctl, host, store
 
 
+class MetadataTests(Files):
+    def setup_media(self):
+        source = self.file('download/Show.S01E01.mkv')
+        target = self.file('library/Show/Season 1/Show.S01E01.mkv')
+        nfo = self.file('library/Show/tvshow.nfo', b'<tvshow><uniqueid type="tmdb">100</uniqueid></tvshow>')
+        poster = self.file('library/Show/poster.jpg', b'art')
+        season = self.file('library/Show/Season 1/season.nfo', b'season metadata')
+        season_poster = self.file('library/Show/Season 1/poster.jpg', b'art')
+        neighbour = self.file('library/Show/notes.txt', b'keep')
+        inv = Inventory([], [], [record(status=True, src=source, dest=target)])
+        return inv, source, target, {nfo, poster, season, season_poster}, neighbour
+
+    def test_whole_cancel_executor_removes_proven_metadata_and_keeps_unknown_neighbour(self):
+        inv, source, target, metadata, neighbour = self.setup_media()
+        ctl, _, _ = self.controller(inv)
+        ctl.enqueue_cancel(SCOPE)
+        ctl.run(dry_run=False)
+        self.assertFalse(any(Path(p).exists() for p in metadata | {source, target}))
+        self.assertEqual(Path(neighbour).read_bytes(), b'keep')
+
+    def test_range_edit_preserves_series_and_season_artwork(self):
+        inv, _, _, metadata, _ = self.setup_media()
+        inv.subscriptions = [Subscription(1, SCOPE, 2)]
+        plan = Planner(self.fs).build(inv, set())
+        self.assertFalse(set(plan.files) & metadata)
+
+    def test_other_subscribed_season_preserves_shared_artwork(self):
+        inv, _, _, metadata, _ = self.setup_media()
+        inv.subscriptions = [Subscription(2, Scope(SCOPE.source, SCOPE.media_id, 'tv', 2))]
+        plan = Planner(self.fs).build(inv, {SCOPE})
+        root_files = {p for p in metadata if '/Season 1/' not in p}
+        self.assertFalse(set(plan.files) & root_files)
+        self.assertTrue((metadata - root_files) <= set(plan.files))
+
+    def test_unknown_remaining_video_preserves_metadata(self):
+        inv, _, _, metadata, _ = self.setup_media()
+        self.file('library/Show/Season 1/unregistered.mkv')
+        self.assertFalse(set(Planner(self.fs).build(inv, {SCOPE}).files) & metadata)
+
+    def test_missing_conflicting_or_invalid_nfo_never_adopts_artwork(self):
+        inv, _, _, metadata, _ = self.setup_media()
+        nfo = next(Path(p) for p in metadata if p.endswith('tvshow.nfo'))
+        for value in (b'<tvshow/>', b'<tvshow><uniqueid type="tmdb">other</uniqueid></tvshow>', b'broken'):
+            nfo.write_bytes(value)
+            self.assertFalse(set(Planner(self.fs).build(inv, {SCOPE}).files) & metadata)
+        nfo.unlink()
+        self.assertFalse(set(Planner(self.fs).build(inv, {SCOPE}).files) & metadata)
+
+    def test_same_season_other_group_membership_keeps_shared_metadata(self):
+        inv, _, _, metadata, _ = self.setup_media()
+        inv.subscriptions = [Subscription(2, Scope(SCOPE.source, SCOPE.media_id, 'tv', 1, 'other-group'))]
+        self.assertFalse(set(Planner(self.fs).build(inv, {SCOPE}).files) & metadata)
+
+    def test_symlink_nfo_is_not_followed_for_metadata_ownership(self):
+        inv, _, _, metadata, _ = self.setup_media()
+        nfo = next(Path(p) for p in metadata if p.endswith('tvshow.nfo'))
+        external = self.file('outside-proof.nfo', nfo.read_bytes())
+        nfo.unlink()
+        nfo.symlink_to(external)
+        self.assertFalse(set(Planner(self.fs).build(inv, {SCOPE}).files) & metadata)
+
+    def test_movie_cancel_uses_movie_identity_and_standard_artwork(self):
+        movie = Scope('themoviedb', '100', 'movie')
+        video = self.file('library/Movie/Movie.mkv')
+        nfo = self.file('library/Movie/movie.nfo', b'<movie><uniqueid type="tmdb">100</uniqueid></movie>')
+        poster = self.file('library/Movie/poster.jpg', b'art')
+        inv = Inventory([], [], [record(scope=movie, status=True, dest=video)])
+        self.assertTrue({video, nfo, poster} <= set(Planner(self.fs).build(inv, {movie}).files))
+
+
 class RetentionTests(Files):
     def test_completed_and_paused_membership_keeps_files(self):
         inv, src, dst = self.inventory()
