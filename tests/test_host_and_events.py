@@ -183,6 +183,33 @@ class HostTests(unittest.TestCase):
         sdk_queries.list_download_history.return_value.items = [self.origin_record()]
         self.assertEqual(self.host.inventory(include_torrents=False).downloads[0]['seasons'], 'S01')
 
+    def test_native_organized_target_proves_missing_season_and_episodes(self):
+        row = record(seasons='', episodes='', status=True, dest_storage='local',
+                     dest='/library/Show - S04E80 - Episode.mkv')
+        result = MPHost.normalize(row)
+        self.assertEqual((result['seasons'], result['episodes']), ('S04', 'E80'))
+        row['dest'] = '/library/Show - S04E80-E81.mkv'
+        self.assertEqual(MPHost.normalize(row)['episodes'], 'E80-E81')
+
+    def test_target_season_conflict_or_invalid_existing_field_is_not_overridden(self):
+        for seasons in ('S02', 'unparsed'):
+            row = record(seasons=seasons, episodes='', status=True, dest='/library/Show.S01E01.mkv')
+            result = MPHost.normalize(row)
+            self.assertEqual((result['seasons'], result['episodes']), (seasons, ''))
+
+    def test_target_marker_requires_success_local_video_and_explicit_single_marker(self):
+        base = record(seasons='', episodes='', status=True, dest='/library/Show.S01E01.mkv')
+        for changes in ({'status': False}, {'dest_storage': 'rclone'}, {'dest': '/library/Show01.mkv'},
+                        {'dest': '/library/Show.S01E01.nfo'}, {'dest': '/library/S01E01-S02E02.mkv'},
+                        {'dest': '/library/S01E00.mkv'}, {'dest': '/library/S01E03-E01.mkv'},
+                        {'dest': None, 'src': '/downloads/Show.S01E01.mkv'}):
+            result = MPHost.normalize({**base, **changes})
+            self.assertEqual((result['seasons'], result['episodes']), ('', ''))
+
+    def test_target_marker_preserves_existing_episode_fact(self):
+        row = record(seasons='S01', episodes='E03', status=True, dest='/library/Show.S01E02.mkv')
+        self.assertEqual(MPHost.normalize(row)['episodes'], 'E03')
+
     def test_pagination_and_truncated_page_refused(self):
         query = Mock(side_effect=[SimpleNamespace(items=[{'id': 1}], has_next=True),
                                   SimpleNamespace(items=[{'id': 2}], has_next=False)])

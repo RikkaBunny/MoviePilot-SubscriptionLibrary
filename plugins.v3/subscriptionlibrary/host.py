@@ -16,7 +16,7 @@ from app.sdk.config import settings
 from app.sdk.media import MetaInfo, resolve_media_identity
 from app.sdk.services import DownloaderHelper, MediaServerHelper
 
-from .models import Inventory, Scope, Subscription, Torrent, TorrentFile, plain, scalar
+from .models import Inventory, Scope, Subscription, Torrent, TorrentFile, VIDEO, numbers, plain, scalar
 
 
 class MPHost:
@@ -61,6 +61,24 @@ class MPHost:
                     row['seasons'] = f'S{season:02}'
             except (ValueError, TypeError, KeyError):
                 pass
+        # Successful native organize records may leave both fields empty. The
+        # organized target's explicit SxxEyy marker is evidence; MetaInfo's default
+        # anime season or an unstructured source filename is not.
+        destination = row.get('dest')
+        if (scalar(row.get('type')) in ('tv', '电视剧') and row.get('status') is True
+                and row.get('dest_storage') in (None, '', 'local') and isinstance(destination, str)
+                and Path(destination).suffix.lower() in VIDEO):
+            markers = list(re.finditer(r'(?i)(?<![a-z0-9])S(\d{1,3})E(\d{1,5})(?:-E?(\d{1,5}))?(?![a-z0-9])',
+                                      Path(destination).name))
+            if len(markers) == 1:
+                season, start, end = (int(markers[0][1]), int(markers[0][2]),
+                                      int(markers[0][3] or markers[0][2]))
+                existing = numbers(row.get('seasons'), 'S')
+                if (not scalar(row.get('seasons')) or existing == {season}) and 0 < start <= end and end - start <= 10000:
+                    if not scalar(row.get('seasons')):
+                        row['seasons'] = f'S{season:02}'
+                    if not scalar(row.get('episodes')):
+                        row['episodes'] = f'E{start:02}' + (f'-E{end:02}' if end != start else '')
         return row
 
     def subscriptions(self) -> list[Subscription]:
