@@ -8,7 +8,7 @@ from subscriptionlibrary.models import Scope, Subscription
 
 
 def context(episodes):
-    return {'mediainfo': {'media_source': SCOPE.source, 'media_id': SCOPE.media_id, 'type': '电视剧'},
+    return {'media_info': {'media_source': SCOPE.source, 'media_id': SCOPE.media_id, 'type': '电视剧'},
             'meta_info': {'season_list': [1], 'episode_list': episodes}}
 
 
@@ -48,6 +48,25 @@ class EventTests(unittest.TestCase):
             data = {'origin': 'Subscribe|{"id":1}', 'context': context(eps)}
             self.p.suppress_evicted_download(event(data))
             self.assertEqual(data.get('cancel', False), expected)
+
+    def test_canonical_runtime_context_allows_unarchived_download(self):
+        candidate = SimpleNamespace(
+            media_info=SimpleNamespace(to_dict=lambda: context([3])['media_info']),
+            meta_info=SimpleNamespace(season_list=[1], episode_list=[3]))
+        data = SimpleNamespace(origin='Subscribe|{"id":1}', context=candidate, cancel=False)
+        self.p.suppress_evicted_download(event(data))
+        self.assertFalse(data.cancel)
+        candidate.meta_info.episode_list = [1]
+        self.p.suppress_evicted_download(event(data))
+        self.assertTrue(data.cancel)
+
+    def test_canonical_media_field_precedes_legacy_alias(self):
+        candidate = {**context([3]), 'mediainfo': {'type': '音乐'}}
+        claim, episodes = MPHost.context_claim(candidate, Subscription(1, SCOPE))
+        self.assertEqual((claim, episodes), (SCOPE, frozenset({3})))
+        candidate['mediainfo'] = candidate.pop('media_info')
+        claim, episodes = MPHost.context_claim(candidate, Subscription(1, SCOPE))
+        self.assertEqual((claim, episodes), (SCOPE, frozenset({3})))
 
     def test_selected_episodes_override_whole_pack_only_when_explicit(self):
         data = {'origin': 'Subscribe|{"id":1}', 'context': context(None), 'episodes': [3]}

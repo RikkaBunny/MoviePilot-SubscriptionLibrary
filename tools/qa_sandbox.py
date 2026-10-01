@@ -232,7 +232,8 @@ def native_sdk_checks():
     from app.sdk.events import (Event, SubscribeCompletionCheckContractData,
                                 ResourceDownloadContractData, ContextSnapshot)
     from app.schemas.types import ChainEventType
-    from app.sdk.media import MetaInfo
+    from app.sdk.media import MetaInfo, Context, MediaInfo
+    from app.schemas.event import ResourceDownloadEventData
 
     # Do not instantiate host persistence/service helpers or register a live plugin instance.
     plugin = object.__new__(SubscriptionLibrary)
@@ -252,7 +253,7 @@ def native_sdk_checks():
     checks = ['native completion contract veto']
     for episode, expected in [(80, True), (81, False)]:
         context = ContextSnapshot(
-            mediainfo={'media_source': scope.source, 'media_id': scope.media_id, 'type': '电视剧'},
+            media_info={'media_source': scope.source, 'media_id': scope.media_id, 'type': '电视剧'},
             meta_info={'type': '电视剧', 'begin_season': 1, 'episode_list': [episode]})
         data = ResourceDownloadContractData(context=context,
                                             origin='Subscribe|{"id":900000001}')
@@ -260,6 +261,15 @@ def native_sdk_checks():
         if data.cancel is not expected:
             raise AssertionError(f'Native archive gate episode {episode}')
         checks.append(f'native archive gate episode {episode}')
+    media = MediaInfo()
+    media.from_dict({'media_source': scope.source, 'media_id': scope.media_id, 'type': '电视剧'})
+    for episode, expected in [(80, True), (81, False)]:
+        context = Context(media_info=media, meta_info=MetaInfo(f'QA.S01E{episode}.mkv'))
+        data = ResourceDownloadEventData(context=context, origin='Subscribe|{"id":900000001}')
+        plugin.suppress_evicted_download(Event(ChainEventType.ResourceDownload, data))
+        if data.cancel is not expected:
+            raise AssertionError(f'Native runtime context episode {episode}')
+        checks.append(f'native runtime context episode {episode}')
     if MetaInfo('QA.S01E80.mkv').episode_list != [80]:
         raise AssertionError('Native filename parser')
     checks.append('native filename parser')

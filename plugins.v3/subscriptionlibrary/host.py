@@ -213,7 +213,15 @@ class MPHost:
 
     @staticmethod
     def context_claim(context, subscription: Subscription | None = None):
-        info = plain(context.mediainfo) if not isinstance(context, dict) else context.get('mediainfo') or {}
+        # Both SDK Context and ContextSnapshot expose media_info. Legacy dictionary
+        # payloads may carry mediainfo; never assume that alias exists on runtime objects.
+        if isinstance(context, dict):
+            media = context.get('media_info') or context.get('mediainfo')
+        else:
+            media = getattr(context, 'media_info', None)
+            if media is None:
+                media = getattr(context, 'mediainfo', None)
+        info = plain(media) if media is not None else {}
         meta = context.meta_info if not isinstance(context, dict) else context.get('meta_info') or {}
         source, media_id = resolve_media_identity(media=info)
         info = {**info, 'media_source': scalar(source), 'media_id': scalar(media_id)}
@@ -227,7 +235,7 @@ class MPHost:
                 return None, None
             scope = subscription.scope
         else:
-            if info.get('type') in ('电视剧', 'tv') and (not seasons or len(seasons) != 1):
+            if scalar(info.get('type')) in ('电视剧', 'tv') and (not seasons or len(seasons) != 1):
                 return None, None
             scope = Scope.from_dict(info, next(iter(seasons)) if seasons else 0)
         return scope, frozenset(episodes) if episodes else None

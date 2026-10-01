@@ -22,7 +22,7 @@ class SubscriptionLibrary(_PluginBase):
     plugin_name = '订阅媒体库'
     plugin_desc = '保留已完成订阅；取消订阅联动清理；集数范围同步；容量清理后防重复下载。'
     plugin_icon = 'Moviepilot_A.jpg'
-    plugin_version = '0.1.1'
+    plugin_version = '0.1.2'
     plugin_author = 'RikkaBunny'
     author_url = 'https://github.com/RikkaBunny'
     plugin_config_prefix = 'subscriptionlibrary_'
