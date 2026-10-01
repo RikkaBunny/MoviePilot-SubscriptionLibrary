@@ -5,6 +5,7 @@ All host-version-specific calls stay here. There are no SQL queries or database 
 from __future__ import annotations
 
 from collections import defaultdict
+import json
 from pathlib import Path
 import re
 import time
@@ -41,6 +42,25 @@ class MPHost:
         row = dict(row)
         source, media_id = resolve_media_identity(media=row)
         row['media_source'], row['media_id'] = scalar(source), scalar(media_id)
+        # Native anime history can omit seasons even though its immutable subscription
+        # origin records the exact target season. Use that identity, never the title or
+        # a default S01, and retain ambiguous/manual records for review.
+        note = row.get('note')
+        origin = note.get('source') if isinstance(note, dict) else None
+        if not scalar(row.get('seasons')) and isinstance(origin, str) and origin.startswith('Subscribe|'):
+            try:
+                target = json.loads(origin.split('|', 1)[1])
+                if not isinstance(target, dict) or type(target.get('id')) is not int or target['id'] <= 0:
+                    return row
+                season = target.get('season')
+                if type(season) is not int or season < 0:
+                    return row
+                origin_scope = Scope.from_dict(target)
+                row_scope = Scope.from_dict(row, season)
+                if origin_scope == row_scope and row_scope.kind == 'tv':
+                    row['seasons'] = f'S{season:02}'
+            except (ValueError, TypeError, KeyError):
+                pass
         return row
 
     def subscriptions(self) -> list[Subscription]:

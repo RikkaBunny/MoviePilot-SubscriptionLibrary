@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+import json
 import unittest
 from unittest.mock import Mock, patch
 
@@ -145,6 +146,42 @@ class HostTests(unittest.TestCase):
         sdk_queries.list_download_history.return_value = SimpleNamespace(items=[], has_next=False)
         sdk_queries.list_transfer_history.return_value = SimpleNamespace(items=[], has_next=False)
         http.delete.reset_mock(return_value=True, side_effect=True)
+
+    def origin_record(self, **changes):
+        target = {'id': 25, 'media_source': SCOPE.source, 'media_id': SCOPE.media_id,
+                  'type': '电视剧', 'season': 1, 'episode_group': None, **changes}
+        return record(seasons='', note={'source': 'Subscribe|' + json.dumps(target)})
+
+    def test_native_origin_proves_missing_anime_season(self):
+        row = self.origin_record(season=4)
+        self.assertEqual(MPHost.normalize(row)['seasons'], 'S04')
+        self.assertEqual(row['seasons'], '')
+
+    def test_origin_identity_must_match_source_id_type_and_group(self):
+        for change in ({'media_id': 'other'}, {'media_source': 'bangumi'},
+                       {'type': '电影'}, {'episode_group': 'different'}):
+            with self.subTest(change=change):
+                self.assertEqual(MPHost.normalize(self.origin_record(**change))['seasons'], '')
+
+    def test_missing_or_invalid_origin_is_retained_without_guessing(self):
+        for value in (None, {}, {'source': 'Manual'}, {'source': 'Subscribe|bad'},
+                      {'source': 'Subscribe|[]'}):
+            self.assertEqual(MPHost.normalize(record(seasons='', note=value))['seasons'], '')
+
+    def test_origin_requires_valid_subscription_id_and_explicit_season(self):
+        for change in ({'id': 0}, {'id': '25'}, {'id': None}, {'season': None},
+                       {'season': True}, {'season': -1}, {'season': '1'}):
+            self.assertEqual(MPHost.normalize(self.origin_record(**change))['seasons'], '')
+
+    def test_explicit_history_season_is_never_replaced_by_origin(self):
+        row = self.origin_record()
+        row['seasons'] = 'S02'
+        self.assertEqual(MPHost.normalize(row)['seasons'], 'S02')
+
+    def test_origin_proof_survives_subscription_cancellation(self):
+        self.assertFalse(self.host.subscriptions())
+        sdk_queries.list_download_history.return_value.items = [self.origin_record()]
+        self.assertEqual(self.host.inventory(include_torrents=False).downloads[0]['seasons'], 'S01')
 
     def test_pagination_and_truncated_page_refused(self):
         query = Mock(side_effect=[SimpleNamespace(items=[{'id': 1}], has_next=True),
