@@ -48,6 +48,120 @@ class Files(unittest.TestCase):
         return ctl, host, store
 
 
+class IdentityMigrationTests(Files):
+    def migrated_inventory(self, episodes=(1,)):
+        old = Scope('bangumi', '265', 'tv', 1)
+        transfers, manifest = [], []
+        for i, episode in enumerate(episodes):
+            source = self.file(f'download/Show.S01E{episode:02}.mkv')
+            target = self.root / f'library/Show.S01E{episode:02}.mkv'
+            target.parent.mkdir(parents=True, exist_ok=True)
+            os.link(source, target)
+            transfers.append(record(i + 10, status=True, src=source, dest=str(target),
+                                    episodes=f'E{episode:02}', downloader='qB', download_hash='hash'))
+            manifest.append(TorrentFile(i, source, 1, frozenset({episode}), 1))
+        torrent = Torrent('qB', 'hash', tuple(manifest))
+        inv = Inventory([Subscription(1, SCOPE)],
+                        [record(scope=old, episodes='E01-E02', downloader='qB', download_hash='hash')],
+                        transfers, {torrent.key: torrent})
+        return old, inv
+
+    def test_migrated_source_is_deleted_after_later_canonical_cancel(self):
+        old, inv = self.migrated_inventory()
+        source = inv.transfers[0]['src']
+        ctl, host, store = self.controller(inv)
+        ctl.enqueue_cancel(old)
+        ctl.run(dry_run=False)
+        self.assertEqual(store['cancelled'], {})
+        self.assertTrue(Path(source).exists())
+        self.assertIn(old.key, store['retired'])
+        host.inv.subscriptions = []
+        ctl.enqueue_cancel(SCOPE)
+        ctl.run(dry_run=False)
+        self.assertFalse(Path(source).exists())
+        self.assertFalse(host.inv.downloads or host.inv.transfers or host.inv.torrents)
+        self.assertEqual(store['retired'], {})
+
+    def test_migrated_source_range_prunes_only_removed_episodes(self):
+        old, inv = self.migrated_inventory((1, 2))
+        sources = [r['src'] for r in inv.transfers]
+        ctl, host, _ = self.controller(inv)
+        ctl.enqueue_cancel(old)
+        ctl.run(dry_run=False)
+        host.inv.subscriptions = [Subscription(1, SCOPE, 2)]
+        ctl.run(dry_run=False)
+        self.assertFalse(Path(sources[0]).exists())
+        self.assertTrue(Path(sources[1]).exists())
+        self.assertIn('qB:hash', host.inv.torrents)
+
+    def test_retired_identity_survives_controller_reload(self):
+        old, inv = self.migrated_inventory()
+        source = inv.transfers[0]['src']
+        ctl, host, store = self.controller(inv)
+        ctl.enqueue_cancel(old)
+        ctl.run(dry_run=False)
+        restarted = Controller(host, self.fs, lambda: deepcopy(store), ctl.save, lambda: True)
+        host.inv.subscriptions = []
+        restarted.enqueue_cancel(SCOPE)
+        restarted.run(dry_run=False)
+        self.assertFalse(Path(source).exists())
+
+    def test_resubscribed_retired_identity_protects_shared_source(self):
+        old, inv = self.migrated_inventory()
+        source = inv.transfers[0]['src']
+        ctl, host, _ = self.controller(inv)
+        ctl.enqueue_cancel(old)
+        ctl.run(dry_run=False)
+        host.inv.subscriptions = [Subscription(2, old)]
+        ctl.run(dry_run=False)
+        self.assertTrue(Path(source).exists())
+        self.assertIn('qB:hash', host.inv.torrents)
+
+    def test_retired_identity_does_not_adopt_unregistered_media(self):
+        old, inv = self.migrated_inventory()
+        unrelated = self.file('download/unregistered.mkv')
+        ctl, host, _ = self.controller(inv)
+        ctl.enqueue_cancel(old)
+        ctl.run(dry_run=False)
+        host.inv.subscriptions = []
+        ctl.enqueue_cancel(SCOPE)
+        ctl.run(dry_run=False)
+        self.assertEqual(Path(unrelated).read_bytes(), b'video')
+
+    def test_import_is_validated_before_writing_any_intent(self):
+        old, inv = self.migrated_inventory()
+        ctl, _, store = self.controller(inv)
+        with self.assertRaises(ValueError):
+            ctl.import_cancelled([old.key, 'invalid-json'])
+        self.assertEqual(store, {})
+        ctl.import_cancelled([old.key])
+        self.assertIn(old.key, store['cancelled'])
+
+    def test_main_and_specials_shared_pack_can_be_cancelled_separately(self):
+        old, inv = self.migrated_inventory((1, 13))
+        special = Scope('themoviedb', SCOPE.media_id, 'tv', 0)
+        inv.subscriptions.append(Subscription(2, special, 2, 4))
+        inv.transfers[1].update(seasons='S00', episodes='E02')
+        torrent = inv.torrents['qB:hash']
+        inv.torrents['qB:hash'] = Torrent('qB', 'hash', tuple(
+            TorrentFile(f.index, f.path, None, f.episodes, f.priority) for f in torrent.files))
+        sources = [r['src'] for r in inv.transfers]
+        ctl, host, store = self.controller(inv)
+        ctl.enqueue_cancel(old)
+        ctl.run(dry_run=False)
+        host.inv.subscriptions = [Subscription(2, special, 2, 4)]
+        ctl.enqueue_cancel(SCOPE)
+        ctl.run(dry_run=False)
+        self.assertFalse(Path(sources[0]).exists())
+        self.assertTrue(Path(sources[1]).exists())
+        host.inv.subscriptions = []
+        ctl.enqueue_cancel(special)
+        ctl.run(dry_run=False)
+        self.assertFalse(Path(sources[1]).exists())
+        self.assertFalse(host.inv.torrents)
+        self.assertEqual(store['retired'], {})
+
+
 class MetadataTests(Files):
     def setup_media(self):
         source = self.file('download/Show.S01E01.mkv')

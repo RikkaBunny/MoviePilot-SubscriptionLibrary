@@ -22,7 +22,7 @@ class SubscriptionLibrary(_PluginBase):
     plugin_name = '订阅媒体库'
     plugin_desc = '保留已完成订阅；取消订阅联动清理；集数范围同步；容量清理后防重复下载。'
     plugin_icon = 'Moviepilot_A.jpg'
-    plugin_version = '0.1.8'
+    plugin_version = '0.1.9'
     plugin_author = 'RikkaBunny'
     author_url = 'https://github.com/RikkaBunny'
     plugin_config_prefix = 'subscriptionlibrary_'
@@ -52,12 +52,15 @@ class SubscriptionLibrary(_PluginBase):
                                               lambda state: self.save_data('state', state), self._deletion_active,
                                               bool(self._config['archive_guard']), int(self._config['max_files']),
                                               self.get_data_path() / 'state.lock')
+                if self._config.get('import_cancelled_scopes'):
+                    self._controller.import_cancelled(self._config['import_cancelled_scopes'])
                 if self._config.get('reset_root_baseline'):
                     self._controller.reset_baseline()
                 if self._config.get('restore_scopes'):
                     self._controller.restore(list(self._config['restore_scopes']))
                 run_once = bool(self._config.get('run_once'))
-                self._config.update(run_once=False, reset_root_baseline=False, restore_scopes=[])
+                self._config.update(run_once=False, reset_root_baseline=False, restore_scopes=[],
+                                    import_cancelled_scopes=[])
                 self.update_config(self._config)
                 if run_once:
                     self.run()
@@ -69,7 +72,7 @@ class SubscriptionLibrary(_PluginBase):
     def defaults():
         return {'enabled': False, 'keep_completed': True, 'dry_run': True, 'archive_guard': True,
                 'managed_roots': '', 'interval_minutes': 2, 'max_files': 10000, 'run_once': False,
-                'restore_scopes': [], 'reset_root_baseline': False}
+                'restore_scopes': [], 'reset_root_baseline': False, 'import_cancelled_scopes': []}
 
     def _deletion_active(self):
         live = self.get_config() or self._config

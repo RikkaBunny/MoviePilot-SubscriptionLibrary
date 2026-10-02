@@ -10,7 +10,7 @@ from pathlib import Path
 from .archive import capture_evictions, scope_from_key
 from .filesystem import PathPolicy
 from .models import Inventory, Plan, Scope
-from .planner import Planner, artifacts
+from .planner import Planner, artifacts, record_claims
 
 
 class StalePlan(RuntimeError):
@@ -51,7 +51,47 @@ class Controller:
         state = self.load() or {'schema': 1, 'cancelled': {}, 'archived': {}, 'artifacts': []}
         if state.get('schema') != 1:
             raise RuntimeError('Unsupported plugin state schema; refuse to overwrite')
+        state.setdefault('retired', {})
         return state
+
+    def import_cancelled(self, keys: list[str]) -> None:
+        """Replay explicitly audited cancellation identities through normal plugin storage."""
+        if not isinstance(keys, list) or len(keys) > 1000:
+            raise ValueError('取消身份补录格式不正确')
+        scopes = [scope_from_key(key) for key in keys]
+        if any(not isinstance(s.source, str) or not s.source.strip()
+               or not isinstance(s.media_id, str) or not s.media_id.strip()
+               or s.kind not in ('movie', 'tv') or type(s.season) is not int
+               or s.season < 0 or not isinstance(s.episode_group, str) for s in scopes):
+            raise ValueError('取消身份补录内容不正确')
+        with self.locked():
+            state = self.state()
+            for scope in scopes:
+                state['cancelled'].setdefault(scope.key, now())
+            self.save(state)
+
+    @staticmethod
+    def _prune_retired(state: dict, inventory: Inventory) -> None:
+        """Keep cancellation facts while a shared task/history still refers to them."""
+        referenced = set()
+        uncertain = set()
+        unknown = False
+        for row in inventory.downloads + inventory.transfers:
+            try:
+                claims = record_claims(row)
+                if not claims:
+                    raise ValueError('Missing season')
+                referenced.update(c.scope.key for c in claims)
+            except (ValueError, TypeError, KeyError):
+                source, identity = row.get('media_source'), row.get('media_id')
+                if not source or not identity:
+                    unknown = True
+                else:
+                    uncertain.add((str(source), str(identity)))
+        if not unknown:
+            state['retired'] = {key: value for key, value in state['retired'].items()
+                                if key in referenced or
+                                (scope_from_key(key).source, scope_from_key(key).media_id) in uncertain}
 
     def enqueue_cancel(self, scope: Scope) -> None:
         with self.locked():
@@ -200,7 +240,8 @@ class Controller:
             try:
                 inventory = self.host.inventory()
                 self.observe(state, inventory)
-                cancelled = {scope_from_key(key) for key in state['cancelled']}
+                pending_cancellations = {scope_from_key(key) for key in state['cancelled']}
+                cancelled = pending_cancellations | {scope_from_key(key) for key in state['retired']}
                 plan = Planner(self.fs).build(inventory, cancelled)
                 state['preview'] = plan.to_dict()
                 state['last_preview'] = now()
@@ -223,17 +264,21 @@ class Controller:
                     if plan.has_actions:
                         self.execute(plan, state)
                     # Queue is acknowledged only after all plan steps succeed, even on retry.
-                    for scope in cancelled:
+                    for scope in pending_cancellations:
                         if scope.key in plan.unresolved_scopes:
                             continue
-                        state['cancelled'].pop(scope.key, None)
+                        # A migrated or mixed pack can still be kept by another subscription.
+                        # Acknowledging the queue must not turn its old owner into a kept orphan.
+                        state['retired'][scope.key] = state['cancelled'].pop(scope.key)
                         if not any(s.scope == scope for s in inventory.subscriptions):
                             state['archived'].pop(scope.key, None)
                     if state.get('refresh_pending'):
                         self.host.refresh()
                         state.pop('refresh_pending', None)
                     # Don't classify intentional range/cancellation pruning as a capacity eviction.
-                    state['artifacts'] = artifacts(self.host.inventory(include_torrents=False), self.fs)
+                    current = self.host.inventory(include_torrents=False)
+                    self._prune_retired(state, current)
+                    state['artifacts'] = artifacts(current, self.fs)
                     state['last_success'] = now()
                 state.pop('last_error', None)
                 self.save(state)
